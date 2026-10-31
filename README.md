@@ -55,7 +55,9 @@ ml-assignment-2/
     ├── naive_bayes.joblib
     ├── support_vector_machine.joblib
     ├── feature_info.json       feature lists / label mapping used by the app
-    └── metrics.csv             metrics of every model on test_data.csv
+    ├── metrics.csv             metrics of every model on test_data.csv
+    ├── cv_scores.csv           5-fold cross-validation mean / std on the training split
+    └── tuning_results.json     grid-search results for KNN and Decision Tree
 ```
 
 ## d. Models used
@@ -66,18 +68,35 @@ held-out `test_data.csv`.
 | Model | Configuration |
 |---|---|
 | Logistic Regression | `LogisticRegression(max_iter=2000, C=1.0)` |
-| Decision Tree | `DecisionTreeClassifier(max_depth=12, min_samples_leaf=3)` |
-| KNN | `KNeighborsClassifier(n_neighbors=7, weights="distance")` |
+| Decision Tree | `DecisionTreeClassifier(criterion="entropy", max_depth=10, min_samples_leaf=1)` – tuned |
+| KNN | `KNeighborsClassifier(n_neighbors=3, weights="distance")` – tuned |
 | Naive Bayes | `GaussianNB()` |
 | Support Vector Machine | RBF-kernel `SVC(C=2.0)` wrapped in `CalibratedClassifierCV` for probability scores |
+
+### Hyperparameter tuning
+
+KNN and the Decision Tree were tuned with `GridSearchCV` (stratified 5-fold CV on the
+training split only, selecting by MCC). Full results are in `model/tuning_results.json`.
+
+| Model | Grid searched | Best setting | CV MCC |
+|---|---|---|---|
+| Decision Tree | `max_depth` ∈ {6, 8, 10, 12, 16, 20, None}, `min_samples_leaf` ∈ {1, 2, 3, 5}, `criterion` ∈ {gini, entropy} (56 combinations) | entropy, depth 10, leaf 1 | 0.9932 |
+| KNN | `n_neighbors` ∈ {3, 5, 7, 9, 11, 15}, `weights` ∈ {uniform, distance} (12 combinations) | k = 3, distance | 0.9894 |
+
+Effect on the test set compared with the earlier hand-picked settings:
+
+| Model | MCC before → after | F1 before → after | AUC before → after |
+|---|---|---|---|
+| Decision Tree (depth 12, leaf 3 → tuned) | 0.9916 → 0.9948 | 0.9955 → 0.9972 | 0.9979 → 0.9974 |
+| KNN (k = 7 → tuned) | 0.9892 → 0.9904 | 0.9942 → 0.9949 | 0.9980 → 0.9973 |
 
 ### Comparison table (test set, 5,039 rows)
 
 | ML Model Name | Accuracy | AUC | Precision | Recall | F1 | MCC |
 |---|---|---|---|---|---|---|
 | Logistic Regression | 0.9748 | 0.9956 | 0.9805 | 0.9651 | 0.9728 | 0.9494 |
-| Decision Tree | 0.9958 | 0.9979 | 0.9966 | 0.9945 | 0.9955 | 0.9916 |
-| KNN | 0.9946 | 0.9980 | 0.9957 | 0.9928 | 0.9942 | 0.9892 |
+| Decision Tree | 0.9974 | 0.9974 | 0.9987 | 0.9957 | 0.9972 | 0.9948 |
+| KNN | 0.9952 | 0.9973 | 0.9962 | 0.9936 | 0.9949 | 0.9904 |
 | Naive Bayes | 0.8625 | 0.9855 | 0.9976 | 0.7067 | 0.8273 | 0.7480 |
 | Support Vector Machine | 0.9921 | 0.9991 | 0.9927 | 0.9902 | 0.9915 | 0.9841 |
 
