@@ -3,16 +3,19 @@ Train the five classifiers required by ML Assignment 2 on the Kaggle
 "Network Intrusion Detection" dataset and save them under model/.
 
 Usage (from the project root):
-    python model/train_models.py
+    python model/train_models.py              # train, cross-validate and evaluate
+    python model/train_models.py --skip-cv    # faster: skip the 5-fold cross-validation
 
 Outputs
 -------
 model/<name>.joblib    one fitted Pipeline (preprocessing + classifier) per model
 model/feature_info.json  feature lists / label mapping used by the Streamlit app
 model/metrics.csv      evaluation metrics of every model on the held-out test set
+model/cv_scores.csv    5-fold cross-validation mean / std of every metric (training split only)
 test_data.csv          held-out 20% test split (features + target), for the app
 """
 
+import argparse
 import json
 import time
 from pathlib import Path
@@ -26,12 +29,13 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     accuracy_score,
     f1_score,
+    make_scorer,
     matthews_corrcoef,
     precision_score,
     recall_score,
     roc_auc_score,
 )
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import StratifiedKFold, cross_validate, train_test_split
 from sklearn.naive_bayes import GaussianNB
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.pipeline import Pipeline
@@ -48,6 +52,17 @@ TARGET = "class"
 POSITIVE_LABEL = "anomaly"  # an intrusion is the positive class (1)
 CATEGORICAL = ["protocol_type", "service", "flag"]
 SEED = 26
+CV_FOLDS = 5
+
+# scikit-learn scorer names for the six assignment metrics
+CV_SCORING = {
+    "Accuracy": "accuracy",
+    "AUC": "roc_auc",
+    "Precision": "precision",
+    "Recall": "recall",
+    "F1": "f1",
+    "MCC": make_scorer(matthews_corrcoef),
+}
 
 
 def load_dataset():
@@ -98,7 +113,21 @@ def evaluate(y_true, y_pred, y_score):
     }
 
 
+def cross_validate_model(pipe, X_train, y_train):
+    """Stratified k-fold CV on the training split only, so test_data.csv stays unseen.
+
+    Returns {metric: (mean, std)} across the folds.
+    """
+    folds = StratifiedKFold(n_splits=CV_FOLDS, shuffle=True, random_state=SEED)
+    cv = cross_validate(pipe, X_train, y_train, cv=folds, scoring=CV_SCORING, n_jobs=-1)
+    return {m: (cv[f"test_{m}"].mean(), cv[f"test_{m}"].std()) for m in CV_SCORING}
+
+
 def main():
+    parser = argparse.ArgumentParser(description="Train and evaluate the five classifiers.")
+    parser.add_argument("--skip-cv", action="store_true", help="skip the 5-fold cross-validation")
+    args = parser.parse_args()
+
     df, dropped = load_dataset()
     print(f"Dataset after cleaning: {df.shape[0]} rows, {df.shape[1] - 1} features "
           f"(dropped constant columns: {dropped})")
@@ -119,9 +148,21 @@ def main():
     print(f"Saved test split ({len(test_df)} rows) -> {TEST_CSV.name}")
 
     MODEL_DIR.mkdir(exist_ok=True)
-    rows = []
+    rows, cv_rows = [], []
     for name, clf in get_classifiers().items():
         pipe = Pipeline([("prep", build_preprocessor(numeric_cols)), ("clf", clf)])
+
+        if not args.skip_cv:
+            start = time.perf_counter()
+            cv_scores = cross_validate_model(pipe, X_train, y_train)
+            row = {"Model": name}
+            for m, (mean, std) in cv_scores.items():
+                row[f"{m} mean"], row[f"{m} std"] = mean, std
+            cv_rows.append(row)
+            # "+/-" instead of the plus-minus sign so it prints on any Windows console
+            print(f"{name:<24} {CV_FOLDS}-fold CV in {time.perf_counter() - start:6.1f}s  "
+                  + "  ".join(f"{m}={mean:.4f}+/-{std:.4f}" for m, (mean, std) in cv_scores.items()))
+
         start = time.perf_counter()
         pipe.fit(X_train, y_train)
         elapsed = time.perf_counter() - start
@@ -154,6 +195,17 @@ def main():
 
     print("\nComparison table (test set):")
     print(metrics.to_string())
+
+    if cv_rows:
+        cv_table = pd.DataFrame(cv_rows).set_index("Model").round(4)
+        cv_table.to_csv(MODEL_DIR / "cv_scores.csv")
+        summary = pd.DataFrame(
+            {m: [f"{r[f'{m} mean']:.4f} +/- {r[f'{m} std']:.4f}" for _, r in cv_table.iterrows()]
+             for m in CV_SCORING},
+            index=cv_table.index,
+        )
+        print(f"\n{CV_FOLDS}-fold cross-validation on the training split (mean +/- std):")
+        print(summary.to_string())
 
 
 if __name__ == "__main__":
