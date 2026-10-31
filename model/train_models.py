@@ -14,6 +14,7 @@ model/feature_info.json  feature lists / label mapping used by the Streamlit app
 model/metrics.csv      evaluation metrics of every model on the held-out test set
 model/cv_scores.csv    5-fold cross-validation mean / std of every metric (training split only)
 model/tuning_results.json  grid-search results for the tuned models (KNN, Decision Tree)
+model/feature_importances.csv  Decision Tree importance of each original dataset column
 test_data.csv          held-out 20% test split (features + target), for the app
 """
 
@@ -161,6 +162,32 @@ def tune_model(pipe, grid, X_train, y_train):
     return search.best_estimator_, summary
 
 
+def feature_importances(pipe):
+    """Decision Tree importances mapped back to the original dataset columns.
+
+    One-hot columns such as "cat__service_http" are summed into their source column
+    ("service"); for categorical columns the single most important value is kept as well.
+    """
+    encoded_names = pipe.named_steps["prep"].get_feature_names_out()
+    weights = pipe.named_steps["clf"].feature_importances_
+
+    rows = []
+    for encoded, weight in zip(encoded_names, weights):
+        group, name = encoded.split("__", 1)
+        if group == "cat":
+            column = next(c for c in CATEGORICAL if name.startswith(c + "_"))
+            rows.append((column, "categorical", name[len(column) + 1:], weight))
+        else:
+            rows.append((name, "numeric", None, weight))
+    parts = pd.DataFrame(rows, columns=["feature", "type", "value", "importance"])
+
+    table = parts.groupby(["feature", "type"], as_index=False)["importance"].sum()
+    top_value = (parts.dropna(subset=["value"]).sort_values("importance", ascending=False)
+                 .drop_duplicates("feature").set_index("feature")["value"])
+    table["top_value"] = table["feature"].map(top_value)
+    return table.sort_values("importance", ascending=False).round(4).reset_index(drop=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Train and evaluate the five classifiers.")
     parser.add_argument("--skip-cv", action="store_true", help="skip the 5-fold cross-validation")
@@ -225,6 +252,10 @@ def main():
         print(f"{name:<24} trained in {elapsed:6.1f}s  "
               + "  ".join(f"{k}={v:.4f}" for k, v in scores.items()))
 
+        if name == "Decision Tree":
+            importances = feature_importances(pipe)
+            importances.to_csv(MODEL_DIR / "feature_importances.csv", index=False)
+
     metrics = pd.DataFrame(rows).set_index("Model").round(4)
     metrics.to_csv(MODEL_DIR / "metrics.csv")
 
@@ -243,6 +274,9 @@ def main():
     (MODEL_DIR / "feature_info.json").write_text(json.dumps(info, indent=2))
     if tuning:
         (MODEL_DIR / "tuning_results.json").write_text(json.dumps(tuning, indent=2))
+
+    print("\nTop 10 Decision Tree features (importance, summed over one-hot columns):")
+    print(importances.head(10).fillna("-").to_string(index=False))
 
     print("\nComparison table (test set):")
     print(metrics.to_string())
