@@ -45,12 +45,6 @@ def load_artifacts():
     return info, models
 
 
-@st.cache_data
-def load_reference_metrics():
-    path = MODEL_DIR / "metrics.csv"
-    return pd.read_csv(path, index_col=0) if path.exists() else None
-
-
 def encode_target(series, info):
     """Map the text target to 0/1. Accepts 'normal'/'anomaly' or already-numeric 0/1."""
     if pd.api.types.is_numeric_dtype(series):
@@ -130,11 +124,6 @@ st.write(
 if uploaded is None:
     st.info("Upload a test CSV from the sidebar to begin. "
             "You can download the sample `test_data.csv` there if you need one.")
-    ref = load_reference_metrics()
-    if ref is not None:
-        st.subheader("Reference metrics on the held-out test split")
-        st.dataframe(ref.style.format("{:.4f}").highlight_max(axis=0, props=BEST_STYLE),
-                     width="stretch")
     st.stop()
 
 try:
