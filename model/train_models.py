@@ -3,8 +3,9 @@ Train the five classifiers required by ML Assignment 2 on the Kaggle
 "Network Intrusion Detection" dataset and save them under model/.
 
 Usage (from the project root):
-    python model/train_models.py              # train, cross-validate and evaluate
-    python model/train_models.py --skip-cv    # faster: skip the 5-fold cross-validation
+    python model/train_models.py                  # tune, train, cross-validate and evaluate
+    python model/train_models.py --skip-cv        # faster: skip the 5-fold cross-validation
+    python model/train_models.py --skip-tuning    # use the default hyperparameters as-is
 
 Outputs
 -------
@@ -12,6 +13,7 @@ model/<name>.joblib    one fitted Pipeline (preprocessing + classifier) per mode
 model/feature_info.json  feature lists / label mapping used by the Streamlit app
 model/metrics.csv      evaluation metrics of every model on the held-out test set
 model/cv_scores.csv    5-fold cross-validation mean / std of every metric (training split only)
+model/tuning_results.json  grid-search results for the tuned models (KNN, Decision Tree)
 test_data.csv          held-out 20% test split (features + target), for the app
 """
 
@@ -35,7 +37,7 @@ from sklearn.metrics import (
     recall_score,
     roc_auc_score,
 )
-from sklearn.model_selection import StratifiedKFold, cross_validate, train_test_split
+from sklearn.model_selection import GridSearchCV, StratifiedKFold, cross_validate, train_test_split
 from sklearn.naive_bayes import GaussianNB
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.pipeline import Pipeline
@@ -62,6 +64,20 @@ CV_SCORING = {
     "Recall": "recall",
     "F1": "f1",
     "MCC": make_scorer(matthews_corrcoef),
+}
+
+# Hyperparameter grids searched before the final fit ("clf__" targets the classifier step of
+# the pipeline). MCC is the selection score because it uses all four confusion-matrix cells.
+PARAM_GRIDS = {
+    "KNN": {
+        "clf__n_neighbors": [3, 5, 7, 9, 11, 15],
+        "clf__weights": ["uniform", "distance"],
+    },
+    "Decision Tree": {
+        "clf__max_depth": [6, 8, 10, 12, 16, 20, None],
+        "clf__min_samples_leaf": [1, 2, 3, 5],
+        "clf__criterion": ["gini", "entropy"],
+    },
 }
 
 
@@ -123,9 +139,33 @@ def cross_validate_model(pipe, X_train, y_train):
     return {m: (cv[f"test_{m}"].mean(), cv[f"test_{m}"].std()) for m in CV_SCORING}
 
 
+def tune_model(pipe, grid, X_train, y_train):
+    """Grid search on the training split; returns the refit best pipeline and a summary."""
+    folds = StratifiedKFold(n_splits=CV_FOLDS, shuffle=True, random_state=SEED)
+    search = GridSearchCV(pipe, grid, cv=folds, scoring=CV_SCORING["MCC"], n_jobs=-1)
+    search.fit(X_train, y_train)
+
+    results = pd.DataFrame(search.cv_results_).sort_values("rank_test_score")
+    top = [
+        {"params": {k.removeprefix("clf__"): v for k, v in r["params"].items()},
+         "mean_mcc": round(float(r["mean_test_score"]), 4),
+         "std_mcc": round(float(r["std_test_score"]), 4)}
+        for _, r in results.head(5).iterrows()
+    ]
+    summary = {
+        "best_params": {k.removeprefix("clf__"): v for k, v in search.best_params_.items()},
+        "best_cv_mcc": round(float(search.best_score_), 4),
+        "combinations_tried": len(results),
+        "top_5": top,
+    }
+    return search.best_estimator_, summary
+
+
 def main():
     parser = argparse.ArgumentParser(description="Train and evaluate the five classifiers.")
     parser.add_argument("--skip-cv", action="store_true", help="skip the 5-fold cross-validation")
+    parser.add_argument("--skip-tuning", action="store_true",
+                        help="keep the default hyperparameters instead of grid-searching them")
     args = parser.parse_args()
 
     df, dropped = load_dataset()
@@ -148,9 +188,18 @@ def main():
     print(f"Saved test split ({len(test_df)} rows) -> {TEST_CSV.name}")
 
     MODEL_DIR.mkdir(exist_ok=True)
-    rows, cv_rows = [], []
+    rows, cv_rows, tuning = [], [], {}
     for name, clf in get_classifiers().items():
         pipe = Pipeline([("prep", build_preprocessor(numeric_cols)), ("clf", clf)])
+
+        if name in PARAM_GRIDS and not args.skip_tuning:
+            start = time.perf_counter()
+            pipe, tuning[name] = tune_model(pipe, PARAM_GRIDS[name], X_train, y_train)
+            print(f"{name:<24} tuned in {time.perf_counter() - start:6.1f}s  "
+                  f"best {tuning[name]['best_params']}  CV MCC={tuning[name]['best_cv_mcc']:.4f} "
+                  f"({tuning[name]['combinations_tried']} combinations)")
+        # Note: for tuned models the CV below reuses the folds the grid search chose on,
+        # so it is slightly optimistic; the held-out test set gives the unbiased check.
 
         if not args.skip_cv:
             start = time.perf_counter()
@@ -192,6 +241,8 @@ def main():
         "random_state": SEED,
     }
     (MODEL_DIR / "feature_info.json").write_text(json.dumps(info, indent=2))
+    if tuning:
+        (MODEL_DIR / "tuning_results.json").write_text(json.dumps(tuning, indent=2))
 
     print("\nComparison table (test set):")
     print(metrics.to_string())

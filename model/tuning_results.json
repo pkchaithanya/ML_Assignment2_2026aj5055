@@ -1,0 +1,108 @@
+{
+  "Decision Tree": {
+    "best_params": {
+      "criterion": "entropy",
+      "max_depth": 10,
+      "min_samples_leaf": 1
+    },
+    "best_cv_mcc": 0.9932,
+    "combinations_tried": 56,
+    "top_5": [
+      {
+        "params": {
+          "criterion": "entropy",
+          "max_depth": 10,
+          "min_samples_leaf": 1
+        },
+        "mean_mcc": 0.9932,
+        "std_mcc": 0.0029
+      },
+      {
+        "params": {
+          "criterion": "entropy",
+          "max_depth": 20,
+          "min_samples_leaf": 1
+        },
+        "mean_mcc": 0.993,
+        "std_mcc": 0.0028
+      },
+      {
+        "params": {
+          "criterion": "entropy",
+          "max_depth": 16,
+          "min_samples_leaf": 1
+        },
+        "mean_mcc": 0.993,
+        "std_mcc": 0.0028
+      },
+      {
+        "params": {
+          "criterion": "entropy",
+          "max_depth": null,
+          "min_samples_leaf": 1
+        },
+        "mean_mcc": 0.993,
+        "std_mcc": 0.0028
+      },
+      {
+        "params": {
+          "criterion": "entropy",
+          "max_depth": 12,
+          "min_samples_leaf": 1
+        },
+        "mean_mcc": 0.9929,
+        "std_mcc": 0.0032
+      }
+    ]
+  },
+  "KNN": {
+    "best_params": {
+      "n_neighbors": 3,
+      "weights": "distance"
+    },
+    "best_cv_mcc": 0.9894,
+    "combinations_tried": 12,
+    "top_5": [
+      {
+        "params": {
+          "n_neighbors": 3,
+          "weights": "distance"
+        },
+        "mean_mcc": 0.9894,
+        "std_mcc": 0.0028
+      },
+      {
+        "params": {
+          "n_neighbors": 5,
+          "weights": "distance"
+        },
+        "mean_mcc": 0.9886,
+        "std_mcc": 0.0023
+      },
+      {
+        "params": {
+          "n_neighbors": 7,
+          "weights": "distance"
+        },
+        "mean_mcc": 0.988,
+        "std_mcc": 0.0019
+      },
+      {
+        "params": {
+          "n_neighbors": 3,
+          "weights": "uniform"
+        },
+        "mean_mcc": 0.9877,
+        "std_mcc": 0.0028
+      },
+      {
+        "params": {
+          "n_neighbors": 9,
+          "weights": "distance"
+        },
+        "mean_mcc": 0.987,
+        "std_mcc": 0.0025
+      }
+    ]
+  }
+}
