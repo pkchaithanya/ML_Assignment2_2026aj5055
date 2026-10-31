@@ -118,6 +118,8 @@ Effect on the test set compared with the earlier hand-picked settings:
 * **Evaluation metrics** – Accuracy, AUC, Precision, Recall, F1, MCC for the chosen model (Results tab).
 * **Confusion matrix and classification report** for the chosen model.
 * **Compare** tab – metric table with the best score per column highlighted, bar chart for any metric, and ROC curves.
+* **Features** tab – which dataset columns drive the Decision Tree's predictions
+  (from `model/feature_importances.csv`), with an adjustable top-N chart and the full table.
 * **Data** tab – preview of the uploaded file, and a download of the selected model's predictions.
 * Clear error messages for missing columns or unexpected target values.
 * Responsive layout (phone, tablet, desktop) and light/dark theme, configured in

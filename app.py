@@ -52,6 +52,13 @@ def load_artifacts():
     return info, models
 
 
+@st.cache_data
+def load_importances():
+    """Decision Tree feature importances written by model/train_models.py (None if missing)."""
+    path = MODEL_DIR / "feature_importances.csv"
+    return pd.read_csv(path) if path.exists() else None
+
+
 def encode_target(series, info):
     """Map the text target to 0/1. Accepts 'normal'/'anomaly' or already-numeric 0/1."""
     if pd.api.types.is_numeric_dtype(series):
@@ -152,6 +159,30 @@ def roc_chart(y, results):
     chance = alt.Chart(pd.DataFrame({"x": [0, 1], "y": [0, 1]})).mark_line(
         strokeDash=[4, 4], color="gray").encode(x="x:Q", y="y:Q")
     return (chance + lines).properties(height=320)
+
+
+def importance_chart(importances, top_n):
+    data = importances.head(top_n).copy()
+    # categorical columns show their most important value, e.g. "service (ecr_i)"
+    data["label"] = np.where(data["top_value"].notna(),
+                             data["feature"] + " (" + data["top_value"].fillna("") + ")",
+                             data["feature"])
+    base = alt.Chart(data).encode(
+        y=alt.Y("label:N", sort="-x", title=None, axis=alt.Axis(labelLimit=220)),
+        # headroom past the longest bar so its value label is not clipped
+        x=alt.X("importance:Q", title="Importance", axis=alt.Axis(format="%"),
+                scale=alt.Scale(domain=[0, float(data["importance"].max()) * 1.18])),
+    )
+    # a single neutral teal: the categorical palette already means "one colour per model"
+    bars = base.mark_bar(cornerRadiusEnd=4, color="#14b8a6").encode(
+        tooltip=[alt.Tooltip("feature:N", title="Feature"), alt.Tooltip("type:N", title="Type"),
+                 alt.Tooltip("top_value:N", title="Most important value"),
+                 alt.Tooltip("importance:Q", title="Importance", format=".1%")],
+    )
+    labels = base.mark_text(align="left", dx=4, color="#8b95a5", fontWeight="bold").encode(
+        text=alt.Text("importance:Q", format=".1%")
+    )
+    return (bars + labels).properties(height=max(220, 28 * len(data)))
 
 
 def report_table(y_true, y_pred, class_names):
@@ -264,8 +295,9 @@ with st.container(key="cq_summary"), st.container(key="grid_summary"):
     st.metric("Anomalies", f"{n_anom:,}", delta=f"{n_anom / n_rows:.1%}",
               delta_color="off", delta_arrow="off", border=True, height="stretch")
 
-tab_single, tab_compare, tab_data = st.tabs(
-    [":material/analytics: Results", ":material/leaderboard: Compare", ":material/table_view: Data"]
+tab_single, tab_compare, tab_features, tab_data = st.tabs(
+    [":material/analytics: Results", ":material/leaderboard: Compare",
+     ":material/account_tree: Features", ":material/table_view: Data"]
 )
 
 with tab_single:
@@ -310,6 +342,38 @@ with tab_compare:
             st.altair_chart(roc_chart(y_true, results), width="stretch")
         else:
             st.caption("ROC curves need both classes in the uploaded data.")
+
+with tab_features:
+    importances = load_importances()
+    if importances is None:
+        st.info("Run `python model/train_models.py` to generate feature importances.",
+                icon=":material/info:")
+    else:
+        unused = int((importances["importance"] == 0).sum())
+        st.subheader("Top features driving intrusion predictions")
+        st.caption(
+            "Importance of each original column in the trained Decision Tree (one-hot encoded "
+            "columns are summed). This describes the saved model, so it does not change with the "
+            f"uploaded file. {unused} of {len(importances)} features are never used by the tree."
+        )
+        with st.container(border=True):
+            top_n = st.slider("Features to show", min_value=5, max_value=len(importances),
+                              value=min(10, len(importances)))
+            st.altair_chart(importance_chart(importances, top_n), width="stretch")
+        with st.expander(f"All {len(importances)} features"):
+            st.dataframe(
+                importances,
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "feature": "Feature",
+                    "type": "Type",
+                    "importance": st.column_config.ProgressColumn(
+                        "Importance", format="percent", min_value=0.0,
+                        max_value=float(importances["importance"].max())),
+                    "top_value": "Most important value",
+                },
+            )
 
 with tab_data:
     st.caption(f"First 100 of {n_rows:,} rows · {df.shape[1]} columns")
