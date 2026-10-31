@@ -1,0 +1,46 @@
+/*
+ * Layout helpers for app.py. Colours, radius and fonts come from
+ * .streamlit/config.toml; this file only handles responsive card grids.
+ *
+ * A container with key "cq_<name>" gets the class "st-key-cq_<name>" and
+ * becomes a size container; the "grid_<name>" container inside it picks its
+ * column count from the width it actually has (sidebar open or not), so rows
+ * stay even and values never get truncated.
+ */
+
+[class*="st-key-cq_"] {
+  container-type: inline-size;
+}
+
+[class*="st-key-grid_"] {
+  display: grid;
+  gap: 0.75rem;
+}
+
+/* Six evaluation metrics: 2 -> 3 -> 6 per row */
+.st-key-grid_metrics {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@container (min-width: 480px) {
+  .st-key-grid_metrics {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@container (min-width: 920px) {
+  .st-key-grid_metrics {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+}
+
+/* Dataset summary: always one row of 3; values shrink a little on phones so they fit */
+.st-key-grid_summary {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+@container (max-width: 479px) {
+  .st-key-grid_summary [data-testid="stMetricValue"] {
+    font-size: 1.5rem;
+  }
+}

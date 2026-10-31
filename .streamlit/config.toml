@@ -1,0 +1,31 @@
+# App-wide look and feel. Colours live here instead of inline in app.py so the
+# light and dark themes stay consistent.
+
+[server]
+maxUploadSize = 50
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+baseRadius = "0.6rem"
+buttonRadius = "0.5rem"
+showWidgetBorder = true
+headingFontSizes = ["2rem", "1.35rem", "1.1rem"]
+headingFontWeights = [700, 600, 600]
+# one colour per model, used by every chart
+chartCategoricalColors = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6"]
+
+[theme.light]
+primaryColor = "#0f766e"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f3f6f9"
+textColor = "#0f172a"
+borderColor = "#dbe2ea"
+
+[theme.dark]
+primaryColor = "#2dd4bf"
+backgroundColor = "#0e1117"
+secondaryBackgroundColor = "#1a1f2b"
+textColor = "#e6e9ef"
+borderColor = "#2c3444"

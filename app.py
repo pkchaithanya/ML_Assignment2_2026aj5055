@@ -11,11 +11,10 @@ Run locally:
 import json
 from pathlib import Path
 
+import altair as alt
 import joblib
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import seaborn as sns
 import streamlit as st
 from sklearn.metrics import (
     accuracy_score,
@@ -32,8 +31,16 @@ from sklearn.metrics import (
 ROOT = Path(__file__).resolve().parent
 MODEL_DIR = ROOT / "model"
 SAMPLE_CSV = ROOT / "test_data.csv"
-# readable in both light and dark themes
-BEST_STYLE = "background-color: #2e7d32; color: white; font-weight: 600"
+# translucent tint + bold keeps the theme's own text colour readable in light and dark mode
+BEST_STYLE = "background-color: rgba(45, 212, 191, 0.28); font-weight: 700"
+METRIC_HELP = {
+    "Accuracy": "Share of all rows classified correctly.",
+    "AUC": "Area under the ROC curve: how well the model ranks anomalies above normal traffic.",
+    "Precision": "Of the rows flagged as anomaly, the share that really are anomalies.",
+    "Recall": "Of the real anomalies, the share the model caught.",
+    "F1": "Harmonic mean of precision and recall.",
+    "MCC": "Matthews correlation coefficient: balanced score from -1 to 1 using all four confusion-matrix cells.",
+}
 
 st.set_page_config(page_title="Intrusion Detection - Model Lab", page_icon="🛡️", layout="wide")
 
@@ -71,141 +78,239 @@ def score_model(model, X, y):
     return metrics, y_pred, y_prob
 
 
-def plot_confusion(cm, labels):
-    fig, ax = plt.subplots(figsize=(4.2, 3.6))
-    sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", cbar=False,
-                xticklabels=labels, yticklabels=labels, ax=ax)
-    ax.set_xlabel("Predicted")
-    ax.set_ylabel("Actual")
-    fig.tight_layout()
-    return fig
+@st.cache_data(show_spinner="Scoring the five models on your data…")
+def score_all(X, y, _models):
+    """Score every saved model once per uploaded file; switching models is then instant."""
+    results = {}
+    for name, model in _models.items():
+        metrics, y_pred, y_prob = score_model(model, X, y)
+        results[name] = {"metrics": metrics, "y_pred": y_pred, "y_prob": y_prob}
+    return results
 
 
-def plot_roc(y, scores_by_model):
-    fig, ax = plt.subplots(figsize=(5, 4))
-    for name, prob in scores_by_model.items():
-        fpr, tpr, _ = roc_curve(y, prob)
-        ax.plot(fpr, tpr, label=f"{name} (AUC={roc_auc_score(y, prob):.3f})")
-    ax.plot([0, 1], [0, 1], "k--", lw=0.8)
-    ax.set_xlabel("False positive rate")
-    ax.set_ylabel("True positive rate")
-    ax.legend(fontsize=7, loc="lower right")
-    fig.tight_layout()
-    return fig
+# ---------------- Charts (Altair follows the app theme and resizes with its container) ----------------
+def confusion_chart(cm, labels):
+    data = pd.DataFrame(
+        [(labels[i], labels[j], int(cm[i, j])) for i in range(2) for j in range(2)],
+        columns=["Actual", "Predicted", "Count"],
+    )
+    base = alt.Chart(data).encode(
+        x=alt.X("Predicted:N", sort=labels, axis=alt.Axis(labelAngle=0)),
+        y=alt.Y("Actual:N", sort=labels),
+    )
+    cells = base.mark_rect(cornerRadius=6).encode(
+        color=alt.Color("Count:Q", scale=alt.Scale(scheme="tealblues"), legend=None),
+        tooltip=["Actual", "Predicted", "Count"],
+    )
+    text = base.mark_text(fontSize=20, fontWeight="bold").encode(
+        text="Count:Q",
+        color=alt.condition(alt.datum.Count > data["Count"].max() / 2,
+                            alt.value("white"), alt.value("#0f172a")),
+    )
+    return (cells + text).properties(height=280)
 
 
+def metric_bar_chart(table, metric):
+    data = table[[metric]].reset_index()
+    # bars start at a zoomed baseline instead of 0 so small differences stay visible
+    data["base"] = max(0.0, float(data[metric].min()) - 0.05)
+    base = alt.Chart(data).encode(
+        y=alt.Y("Model:N", sort="-x", title=None, axis=alt.Axis(labelLimit=200)),
+        x=alt.X(f"{metric}:Q", scale=alt.Scale(domain=[data["base"].iloc[0], 1.0], zero=False),
+                title=metric),
+    )
+    bars = base.mark_bar(cornerRadiusEnd=4).encode(
+        x2="base:Q",
+        color=alt.Color("Model:N", legend=None, sort=list(table.index)),
+        tooltip=["Model", alt.Tooltip(f"{metric}:Q", format=".4f")],
+    )
+    # neutral grey just past the bar end reads on both themes, even for very short bars
+    labels = base.mark_text(align="left", dx=4, color="#8b95a5", fontWeight="bold").encode(
+        text=alt.Text(f"{metric}:Q", format=".4f")
+    )
+    return (bars + labels).properties(height=260)
+
+
+def roc_chart(y, results):
+    frames = []
+    for name, res in results.items():
+        fpr, tpr, _ = roc_curve(y, res["y_prob"])
+        auc = res["metrics"]["AUC"]
+        frames.append(pd.DataFrame({"FPR": fpr, "TPR": tpr, "Model": name,
+                                    "Legend": f"{name} ({auc:.3f})"}))
+    data = pd.concat(frames)
+    lines = alt.Chart(data).mark_line(strokeWidth=2).encode(
+        x=alt.X("FPR:Q", title="False positive rate"),
+        y=alt.Y("TPR:Q", title="True positive rate"),
+        color=alt.Color("Legend:N", sort=[f for f in data["Legend"].unique()],
+                        # the lower-right of a ROC plot is empty, so the legend sits inside it
+                        legend=alt.Legend(orient="bottom-right", direction="vertical", labelLimit=0,
+                                          title="Model (AUC)", padding=8, cornerRadius=6,
+                                          fillColor="rgba(128,128,128,0.12)")),
+        tooltip=["Model", alt.Tooltip("FPR:Q", format=".3f"), alt.Tooltip("TPR:Q", format=".3f")],
+    )
+    chance = alt.Chart(pd.DataFrame({"x": [0, 1], "y": [0, 1]})).mark_line(
+        strokeDash=[4, 4], color="gray").encode(x="x:Q", y="y:Q")
+    return (chance + lines).properties(height=320)
+
+
+def report_table(y_true, y_pred, class_names):
+    report = classification_report(y_true, y_pred, labels=[0, 1], target_names=class_names,
+                                   output_dict=True, zero_division=0)
+    rows = class_names + ["macro avg", "weighted avg"]
+    table = pd.DataFrame(report).T.loc[rows]
+    table["support"] = table["support"].astype(int)
+    # short headers keep the table narrow enough for a phone screen
+    table = table.rename(columns={"precision": "Precision", "recall": "Recall",
+                                  "f1-score": "F1", "support": "Support"},
+                         index={"macro avg": "Macro avg", "weighted avg": "Weighted"})
+    return table.style.format("{:.4f}", subset=["Precision", "Recall", "F1"])
+
+
+def metric_cards(items, fmt="{:.4f}"):
+    """Six bordered metric cards in a responsive grid (6 / 3 / 2 per row, see assets/style.css)."""
+    with st.container(key="cq_metrics"), st.container(key="grid_metrics"):
+        for label, value in items:
+            shown = "n/a" if isinstance(value, float) and np.isnan(value) else fmt.format(value)
+            st.metric(label, shown, help=METRIC_HELP.get(label), border=True)
+
+
+st.markdown(f"<style>{(ROOT / 'assets' / 'style.css').read_text()}</style>", unsafe_allow_html=True)
 info, models = load_artifacts()
 feature_cols = info["numeric_features"] + info["categorical_features"]
 class_names = [info["negative_label"], info["positive_label"]]
+target = info["target"]
 
-# ---------------- Sidebar ----------------
-st.sidebar.header("1. Upload test data")
-uploaded = st.sidebar.file_uploader("CSV with all features + 'class' column", type=["csv"])
-if SAMPLE_CSV.exists():
-    st.sidebar.download_button("Download sample test_data.csv", SAMPLE_CSV.read_bytes(),
-                               file_name="test_data.csv", mime="text/csv")
+# ---------------- Sidebar: background info only, the app works without opening it ----------------
+with st.sidebar:
+    st.header("About")
+    st.markdown(
+        "Five classifiers trained on 80% of the Kaggle **Network Intrusion Detection** "
+        "dataset predict whether a network connection is `normal` or an `anomaly`."
+    )
+    st.markdown("**Models**\n\n" + "\n".join(f"- {m}" for m in models))
+    st.caption("Uploaded data is only used for prediction and scoring. "
+               "The models are never retrained in the app.")
 
-st.sidebar.header("2. Choose a model")
-model_name = st.sidebar.selectbox("Classifier", list(models.keys()))
+# ---------------- Header + controls ----------------
+st.title("🛡️ Intrusion Detection Classifier Lab")
+st.caption("Upload labelled network-connection records and see how five trained models "
+           "separate **normal** traffic from **anomalous** (intrusion) traffic.")
 
-st.sidebar.markdown("---")
-st.sidebar.caption(
-    "Models are pre-trained on 80% of the Kaggle *Network Intrusion Detection* data. "
-    "Uploaded data is only used for prediction and scoring."
-)
+with st.container(border=True):
+    col_upload, col_model = st.columns([3, 2], gap="medium")
+    with col_upload:
+        uploaded = st.file_uploader(
+            "Test data (CSV)", type=["csv"],
+            help=f"Must contain the {len(feature_cols)} feature columns and the '{target}' column.",
+        )
+    with col_model:
+        model_name = st.selectbox("Model", list(models.keys()))
+        if SAMPLE_CSV.exists():
+            st.download_button("Download sample test_data.csv", SAMPLE_CSV.read_bytes(),
+                               file_name="test_data.csv", mime="text/csv",
+                               icon=":material/download:", width="stretch")
 
-# ---------------- Main ----------------
-st.title("🛡️ Network Intrusion Detection – Classifier Lab")
-st.write(
-    "Upload labelled network-connection records to see how each of the five trained "
-    "classifiers separates **normal** traffic from **anomalous** (intrusion) traffic."
-)
-
+# ---------------- Empty state ----------------
 if uploaded is None:
-    st.info("Upload a test CSV from the sidebar to begin. "
-            "You can download the sample `test_data.csv` there if you need one.")
+    st.subheader("How it works")
+    steps = [
+        (":material/download:", "1. Get test data",
+         "Use your own labelled CSV or download the sample test_data.csv above."),
+        (":material/upload_file:", "2. Upload it",
+         "Drop the file into the uploader. Nothing is retrained."),
+        (":material/insights:", "3. Review results",
+         "Metrics, confusion matrix and report for the chosen model, plus a side-by-side comparison."),
+    ]
+    for col, (icon, title, text) in zip(st.columns(3), steps):
+        with col.container(border=True, height="stretch"):
+            st.markdown(f"{icon} **{title}**")
+            st.caption(text)
+
+    with st.expander(f"Required columns ({len(feature_cols) + 1})"):
+        st.markdown(" ".join(f"`{c}`" for c in feature_cols + [target]))
+        st.caption(f"`{target}` must be `{class_names[0]}` / `{class_names[1]}` (or 0 / 1).")
     st.stop()
 
+# ---------------- Validate upload ----------------
 try:
     df = pd.read_csv(uploaded)
 except Exception as exc:  # malformed upload
-    st.error(f"Could not read the CSV: {exc}")
+    st.error(f"Could not read the CSV: {exc}", icon=":material/error:")
     st.stop()
 
-target = info["target"]
 missing = [c for c in feature_cols + [target] if c not in df.columns]
 if missing:
-    st.error(f"The uploaded file is missing required columns: {missing}")
+    st.error(f"The uploaded file is missing {len(missing)} required column(s).",
+             icon=":material/error:")
+    with st.expander("Show missing columns", expanded=len(missing) <= 10):
+        st.markdown(" ".join(f"`{c}`" for c in missing))
     st.stop()
 
 try:
     y_true = encode_target(df[target], info)
 except ValueError as exc:
-    st.error(str(exc))
+    st.error(str(exc), icon=":material/error:")
     st.stop()
 X = df[feature_cols]
+results = score_all(X, y_true, models)
 
-c1, c2, c3 = st.columns(3)
-c1.metric("Rows uploaded", f"{len(df):,}")
-c2.metric("Anomalies", f"{int(y_true.sum()):,}")
-c3.metric("Normal", f"{int((1 - y_true).sum()):,}")
+# ---------------- Dataset summary ----------------
+n_rows, n_anom = len(df), int(y_true.sum())
+with st.container(key="cq_summary"), st.container(key="grid_summary"):
+    st.metric("Rows", f"{n_rows:,}", border=True, height="stretch")
+    st.metric("Normal", f"{n_rows - n_anom:,}", delta=f"{(n_rows - n_anom) / n_rows:.1%}",
+              delta_color="off", delta_arrow="off", border=True, height="stretch")
+    st.metric("Anomalies", f"{n_anom:,}", delta=f"{n_anom / n_rows:.1%}",
+              delta_color="off", delta_arrow="off", border=True, height="stretch")
 
-with st.expander("Preview uploaded data"):
-    st.dataframe(df.head(50), width="stretch")
-
-tab_single, tab_compare = st.tabs([f"📊 {model_name}", "🏁 Compare all models"])
+tab_single, tab_compare, tab_data = st.tabs(
+    [":material/analytics: Results", ":material/leaderboard: Compare", ":material/table_view: Data"]
+)
 
 with tab_single:
-    metrics, y_pred, _ = score_model(models[model_name], X, y_true)
+    res = results[model_name]
+    y_pred = res["y_pred"]
 
-    st.subheader("Evaluation metrics")
-    items = list(metrics.items())
-    for row in (items[:3], items[3:]):
-        for col, (k, v) in zip(st.columns(3), row):
-            col.metric(k, "n/a" if np.isnan(v) else f"{v:.4f}")
+    st.subheader(model_name)
+    metric_cards(res["metrics"].items())
 
-    left, right = st.columns([1, 1.3])
-    with left:
-        st.subheader("Confusion matrix")
+    left, right = st.columns([1, 1.25], gap="medium")
+    with left.container(border=True):
+        st.markdown("**Confusion matrix**")
         cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
-        st.pyplot(plot_confusion(cm, class_names))
-    with right:
-        st.subheader("Classification report")
-        report = classification_report(y_true, y_pred, labels=[0, 1], target_names=class_names,
-                                       output_dict=True, zero_division=0)
-        st.dataframe(pd.DataFrame(report).T.style.format("{:.4f}"), width="stretch")
-
-    result = df.copy()
-    result["predicted"] = np.where(y_pred == 1, info["positive_label"], info["negative_label"])
-    st.download_button("Download predictions", result.to_csv(index=False).encode(),
-                       file_name=f"predictions_{model_name.lower().replace(' ', '_')}.csv",
-                       mime="text/csv")
+        st.altair_chart(confusion_chart(cm, class_names), width="stretch")
+    with right.container(border=True):
+        st.markdown("**Classification report**")
+        st.table(report_table(y_true, y_pred, class_names))
+        result = df.copy()
+        result["predicted"] = np.where(y_pred == 1, info["positive_label"], info["negative_label"])
+        st.download_button("Download predictions", result.to_csv(index=False).encode(),
+                           file_name=f"predictions_{model_name.lower().replace(' ', '_')}.csv",
+                           mime="text/csv", icon=":material/download:", type="primary")
 
 with tab_compare:
-    rows, probs = [], {}
-    for name, model in models.items():
-        m, _, prob = score_model(model, X, y_true)
-        rows.append({"Model": name, **m})
-        probs[name] = prob
-    table = pd.DataFrame(rows).set_index("Model")
+    table = pd.DataFrame({name: r["metrics"] for name, r in results.items()}).T
+    table.index.name = "Model"
 
-    st.subheader("Metrics of every model on the uploaded data")
+    best = table["MCC"].idxmax()
+    st.markdown(f"Best on this data by MCC: :green-badge[:material/trophy: {best}]")
     st.dataframe(table.style.format("{:.4f}").highlight_max(axis=0, props=BEST_STYLE),
                  width="stretch")
+    st.caption("Highlighted cells are the best score in each column.")
 
-    left, right = st.columns(2)
-    with left:
-        metric_pick = st.selectbox("Metric to compare", list(table.columns), index=5)
-        fig, ax = plt.subplots(figsize=(5, 3.4))
-        sns.barplot(x=table[metric_pick].values, y=table.index, ax=ax, palette="viridis",
-                    hue=table.index, legend=False)
-        ax.set_xlabel(metric_pick)
-        ax.set_ylabel("")
-        ax.set_xlim(max(0, table[metric_pick].min() - 0.05), 1.0)
-        fig.tight_layout()
-        st.pyplot(fig)
-    with right:
+    left, right = st.columns(2, gap="medium")
+    with left.container(border=True):
+        st.markdown("**Metric by model**")
+        metric_pick = st.selectbox("Metric", list(table.columns), index=list(table.columns).index("MCC"))
+        st.altair_chart(metric_bar_chart(table, metric_pick), width="stretch")
+    with right.container(border=True):
+        st.markdown("**ROC curves**")
         if len(np.unique(y_true)) > 1:
-            st.pyplot(plot_roc(y_true, probs))
+            st.altair_chart(roc_chart(y_true, results), width="stretch")
         else:
             st.caption("ROC curves need both classes in the uploaded data.")
+
+with tab_data:
+    st.caption(f"First 100 of {n_rows:,} rows · {df.shape[1]} columns")
+    st.dataframe(df.head(100), width="stretch", height=420)

@@ -40,6 +40,8 @@ can be given raw rows):
 ```
 ml-assignment-2/
 │-- app.py                      Streamlit application
+│-- .streamlit/config.toml      theme (light + dark)
+│-- assets/style.css            responsive card grids
 │-- requirements.txt
 │-- README.md
 │-- test_data.csv               held-out test split (features + class) – upload this in the app
@@ -92,14 +94,18 @@ held-out `test_data.csv`.
 
 ## Streamlit app features
 
-* **CSV upload** of test data (sidebar) – plus a button to download the sample `test_data.csv`.
+* **CSV upload** of test data at the top of the page – plus a button to download the sample `test_data.csv`.
 * **Model selection dropdown** for the five saved classifiers.
-* **Evaluation metrics** – Accuracy, AUC, Precision, Recall, F1, MCC for the chosen model.
+* **Evaluation metrics** – Accuracy, AUC, Precision, Recall, F1, MCC for the chosen model (Results tab).
 * **Confusion matrix and classification report** for the chosen model.
-* **Compare all models** tab – metric table, bar chart for any metric, and ROC curves.
-* Download of the predictions of the selected model.
+* **Compare** tab – metric table with the best score per column highlighted, bar chart for any metric, and ROC curves.
+* **Data** tab – preview of the uploaded file, and a download of the selected model's predictions.
+* Clear error messages for missing columns or unexpected target values.
+* Responsive layout (phone, tablet, desktop) and light/dark theme, configured in
+  `.streamlit/config.toml` with a small stylesheet in `assets/style.css`.
 
 The app only loads the saved `.joblib` models; it never retrains on the uploaded data.
+Metrics are computed once per uploaded file and cached, so switching models is instant.
 
 ## How to run locally
 
