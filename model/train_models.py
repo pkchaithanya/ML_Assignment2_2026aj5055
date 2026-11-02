@@ -20,12 +20,15 @@ test_data.csv          held-out 20% test split (features + target), for the app
 
 import argparse
 import json
+import platform
 import time
+from datetime import datetime
 from pathlib import Path
 
 import joblib
 import numpy as np
 import pandas as pd
+import sklearn
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.compose import ColumnTransformer
 from sklearn.linear_model import LogisticRegression
@@ -198,12 +201,22 @@ def feature_importances(pipe):
     return table.sort_values("importance", ascending=False).round(4).reset_index(drop=True)
 
 
+def print_environment():
+    """Where and with what this run happened - shown at the top of the BITS Virtual Lab screenshot."""
+    print(f"Run on {platform.node()} ({platform.system()} {platform.release()}) "
+          f"at {datetime.now():%Y-%m-%d %H:%M}")
+    print(f"Python {platform.python_version()} | scikit-learn {sklearn.__version__} | "
+          f"pandas {pd.__version__} | numpy {np.__version__} | joblib {joblib.__version__}\n")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Train and evaluate the five classifiers.")
     parser.add_argument("--skip-cv", action="store_true", help="skip the 5-fold cross-validation")
     parser.add_argument("--skip-tuning", action="store_true",
                         help="keep the default hyperparameters instead of grid-searching them")
     args = parser.parse_args()
+
+    print_environment()
 
     # ---- Step 1: load and clean the Kaggle data ------------------------------------------
     df, dropped = load_dataset()

@@ -145,3 +145,32 @@ for every model, and invalid files show clear errors):
 pip install -r requirements-dev.txt
 python -m pytest
 ```
+
+## Running on BITS Virtual Lab
+
+The assignment was executed on BITS Virtual Lab as follows:
+
+```bash
+git clone <repository link>
+cd <repository folder>
+python -m venv .venv
+# Windows: .venv\Scripts\activate    Linux: source .venv/bin/activate
+pip install -r requirements.txt
+python model/train_models.py
+```
+
+`train_models.py` starts by printing the machine name, date and library versions, then the
+tuning, cross-validation and test-set results – the screenshot covers this output.
+
+If the lab cannot install the pinned versions (for example an older Python), install the
+packages without versions (`pip install streamlit scikit-learn numpy pandas altair joblib`).
+Models saved by a different scikit-learn version should not be committed: the deployed app
+loads the files saved with the version pinned in `requirements.txt`
+(`git restore model test_data.csv` discards the lab-generated files).
+
+| Lab run detail | Value |
+|---|---|
+| Date | `<fill in>` |
+| Python / scikit-learn version | `<fill in from the first lines of the output>` |
+| Training time (full run) | `<fill in>` |
+| Test-set results match the comparison table above? | `<yes / no – note any difference>` |
