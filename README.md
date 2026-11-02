@@ -137,3 +137,11 @@ pip install -r requirements.txt
 python model/train_models.py      # optional – re-creates model/*.joblib and test_data.csv
 streamlit run app.py
 ```
+
+Run the tests (14 end-to-end checks of the app: valid uploads reproduce `model/metrics.csv`
+for every model, and invalid files show clear errors):
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest
+```
