@@ -84,6 +84,7 @@ PARAM_GRIDS = {
 
 def load_dataset():
     df = pd.read_csv(RAW_DATA)
+    # Duplicate rows could land in both the train and test split and inflate the test score.
     df = df.drop_duplicates().reset_index(drop=True)
 
     # Columns with a single value carry no information (e.g. num_outbound_cmds).
@@ -93,8 +94,12 @@ def load_dataset():
 
 
 def build_preprocessor(numeric_cols):
+    # Living inside each model's Pipeline means the scaler and encoder are fitted on the
+    # training rows only, and the saved .joblib file can take raw CSV rows in the app.
     return ColumnTransformer(
         transformers=[
+            # Byte counts reach millions while rates sit in 0-1; scaling stops the large
+            # columns dominating the distance (KNN, SVM) and coefficient (Logistic) based models.
             ("num", StandardScaler(), numeric_cols),
             # dense output so GaussianNB can consume it; unseen categories are ignored
             ("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False), CATEGORICAL),
@@ -103,9 +108,14 @@ def build_preprocessor(numeric_cols):
 
 
 def get_classifiers():
+    # Starting settings; KNN and the Decision Tree are replaced by the grid-search winner
+    # (see PARAM_GRIDS) unless --skip-tuning is passed.
     return {
+        # max_iter raised from the default 100 so the solver converges on ~120 encoded columns
         "Logistic Regression": LogisticRegression(max_iter=2000, C=1.0),
+        # depth / leaf limits keep the tree from memorising individual training rows
         "Decision Tree": DecisionTreeClassifier(max_depth=12, min_samples_leaf=3, random_state=SEED),
+        # distance weighting lets the closest neighbours count more than the far ones
         "KNN": KNeighborsClassifier(n_neighbors=7, weights="distance"),
         "Naive Bayes": GaussianNB(),
         # Platt-scaled SVC so predict_proba is available for the AUC score
@@ -195,15 +205,19 @@ def main():
                         help="keep the default hyperparameters instead of grid-searching them")
     args = parser.parse_args()
 
+    # ---- Step 1: load and clean the Kaggle data ------------------------------------------
     df, dropped = load_dataset()
     print(f"Dataset after cleaning: {df.shape[0]} rows, {df.shape[1] - 1} features "
           f"(dropped constant columns: {dropped})")
     print("Class balance:\n", df[TARGET].value_counts().to_string(), "\n")
 
+    # ---- Step 2: features / target, then an 80/20 train-test split ------------------------
     X = df.drop(columns=[TARGET])
-    y = (df[TARGET] == POSITIVE_LABEL).astype(int)
+    y = (df[TARGET] == POSITIVE_LABEL).astype(int)  # anomaly = 1, normal = 0
     numeric_cols = [c for c in X.columns if c not in CATEGORICAL]
 
+    # stratify keeps the ~53/47 normal/anomaly ratio identical in both parts, and the
+    # fixed random_state makes the split (and every score below) reproducible
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.20, stratify=y, random_state=SEED
     )
@@ -214,11 +228,15 @@ def main():
     test_df.to_csv(TEST_CSV, index=False)
     print(f"Saved test split ({len(test_df)} rows) -> {TEST_CSV.name}")
 
+    # ---- Step 3: for each model, tune -> cross-validate -> fit -> evaluate -> save -------
+    # Everything up to the final fit only ever sees X_train; X_test is touched once, at the
+    # end, so the test metrics are an honest estimate for unseen traffic.
     MODEL_DIR.mkdir(exist_ok=True)
     rows, cv_rows, tuning = [], [], {}
     for name, clf in get_classifiers().items():
         pipe = Pipeline([("prep", build_preprocessor(numeric_cols)), ("clf", clf)])
 
+        # 3a. hyperparameter search (KNN and Decision Tree only)
         if name in PARAM_GRIDS and not args.skip_tuning:
             start = time.perf_counter()
             pipe, tuning[name] = tune_model(pipe, PARAM_GRIDS[name], X_train, y_train)
@@ -228,6 +246,7 @@ def main():
         # Note: for tuned models the CV below reuses the folds the grid search chose on,
         # so it is slightly optimistic; the held-out test set gives the unbiased check.
 
+        # 3b. 5-fold cross-validation: shows how stable the score is across different splits
         if not args.skip_cv:
             start = time.perf_counter()
             cv_scores = cross_validate_model(pipe, X_train, y_train)
@@ -239,15 +258,19 @@ def main():
             print(f"{name:<24} {CV_FOLDS}-fold CV in {time.perf_counter() - start:6.1f}s  "
                   + "  ".join(f"{m}={mean:.4f}+/-{std:.4f}" for m, (mean, std) in cv_scores.items()))
 
+        # 3c. final fit on the whole training split
         start = time.perf_counter()
         pipe.fit(X_train, y_train)
         elapsed = time.perf_counter() - start
 
+        # 3d. evaluate on the held-out test split; y_score (probability of "anomaly") is
+        # needed for AUC, the hard 0/1 predictions for the other five metrics
         y_pred = pipe.predict(X_test)
         y_score = pipe.predict_proba(X_test)[:, 1]
         scores = evaluate(y_test, y_pred, y_score)
         rows.append({"Model": name, **scores})
 
+        # 3e. save the whole pipeline (preprocessing + model) for the Streamlit app
         joblib.dump(pipe, MODEL_DIR / file_name(name), compress=3)
         print(f"{name:<24} trained in {elapsed:6.1f}s  "
               + "  ".join(f"{k}={v:.4f}" for k, v in scores.items()))
@@ -256,9 +279,11 @@ def main():
             importances = feature_importances(pipe)
             importances.to_csv(MODEL_DIR / "feature_importances.csv", index=False)
 
+    # ---- Step 4: write the result files the app and README use ----------------------------
     metrics = pd.DataFrame(rows).set_index("Model").round(4)
     metrics.to_csv(MODEL_DIR / "metrics.csv")
 
+    # the app reads this to know which columns to expect and which file holds which model
     info = {
         "target": TARGET,
         "positive_label": POSITIVE_LABEL,
@@ -275,6 +300,7 @@ def main():
     if tuning:
         (MODEL_DIR / "tuning_results.json").write_text(json.dumps(tuning, indent=2))
 
+    # ---- Step 5: console summary ------------------------------------------------------------
     print("\nTop 10 Decision Tree features (importance, summed over one-hot columns):")
     print(importances.head(10).fillna("-").to_string(index=False))
 
